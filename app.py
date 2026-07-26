@@ -2,47 +2,56 @@ import streamlit as st
 import pandas as pd
 import math
 
-# إعدادات الصفحة
+# Page Configuration
 st.set_page_config(
-    page_title="Breadfast - Fleet & Capacity Distribution",
-    page_icon="🚚",
+    page_title="Breadfast - Logistics Planning",
+    page_icon="📦",
     layout="wide"
 )
 
-# Custom Styling (Breadfast Colors & Fixes)
+# Custom Styling (Light Theme & Breadfast Colors - Fixes Black Text/Sidebar)
 st.markdown("""
 <style>
-    .stApp {
-        background-color: #F9F9FB !important;
-        color: #222222 !important;
+    /* Force Light Background Globally */
+    .stApp, [data-testid="stSidebar"] {
+        background-color: #F8F9FA !important;
+        color: #111111 !important;
     }
-    p, span, label, h1, h2, h3, h4, h5, h6, div {
-        color: #222222 !important;
+
+    /* Fix Text Visibility in Main Area & Sidebar */
+    p, span, label, h1, h2, h3, h4, h5, h6, .stMarkdown, div {
+        color: #111111 !important;
     }
+
+    /* Header Styling */
     .main-header {
         background-color: #AA0082 !important;
-        padding: 20px;
+        padding: 22px;
         border-radius: 12px;
         text-align: center;
         margin-bottom: 25px;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+        box-shadow: 0 4px 10px rgba(0,0,0,0.12);
     }
     .main-header h1 {
         color: #FFFFFF !important;
         margin: 0;
         font-weight: 800;
+        font-size: 2rem;
     }
     .main-header p {
         color: #FFC107 !important;
-        margin-top: 5px;
+        margin-top: 6px;
         font-weight: 600;
+        font-size: 1rem;
     }
+
+    /* Metric Cards */
     div[data-testid="stMetric"] {
         background-color: #FFFFFF !important;
         border-left: 6px solid #AA0082 !important;
         padding: 15px;
         border-radius: 8px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+        box-shadow: 0 2px 6px rgba(0,0,0,0.06);
     }
     div[data-testid="stMetric"] label {
         color: #555555 !important;
@@ -52,6 +61,17 @@ st.markdown("""
         color: #AA0082 !important;
         font-weight: bold !important;
     }
+
+    /* Fix Inputs Background and Text */
+    div[data-baseweb="input"], div[data-baseweb="select"] {
+        background-color: #FFFFFF !important;
+        border: 1px solid #AA0082 !important;
+        border-radius: 6px !important;
+    }
+    input {
+        color: #111111 !important;
+        background-color: #FFFFFF !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -59,10 +79,11 @@ st.markdown("""
 st.markdown("""
 <div class="main-header">
     <h1>🍞 Breadfast Logistics Planning</h1>
-    <p>Fleet Capacity & Branch Distribution Plan</p>
+    <p>Automated Fleet Capacity & SKU Demand Distribution</p>
 </div>
 """, unsafe_allow_html=True)
 
+# Constants & Data Loader
 RACK_FILE = "Rack Capacity.xlsx"
 TRUCK_CAPACITIES = {
     "Standard": 70,
@@ -83,102 +104,103 @@ def load_rack_data():
 rack_df = load_rack_data()
 
 if rack_df is not None:
-    # إستخراج قائمة الفروع المتاحة
+    # Get all dynamic branches
     dest1 = rack_df['Destination#1'].dropna().unique() if 'Destination#1' in rack_df.columns else []
     dest2 = rack_df['Destination#2'].dropna().unique() if 'Destination#2' in rack_df.columns else []
     all_branches = sorted(list(set(dest1).union(set(dest2))))
 
-    st.sidebar.header("⚙️ Dispatch Mode")
-    dispatch_type = st.sidebar.radio("اختر طريقة توزيع الشحنة:", ["شاحنة مشتركة (Multi-Branch Truck)", "فرع واحد (Single Branch)"])
+    # Sidebar Options
+    st.sidebar.header("⚙️ Dispatch Configuration")
+    selected_branch = st.sidebar.selectbox("Select Target Branch", all_branches)
 
-    st.markdown("### 📥 إدخال كميات البلان (Demand Input)")
+    # Filter SKUs belonging to the selected branch
+    branch_skus = rack_df[
+        (rack_df['Destination#1'] == selected_branch) | 
+        (rack_df['Destination#2'] == selected_branch)
+    ].copy()
 
-    branch_inputs = {}
-    
-    if dispatch_type == "شاحنة مشتركة (Multi-Branch Truck)":
-        st.info("💡 قم باختيار الفروع المربوطة ببعضها حسب خريطة التوزيع، وادخل إجمالي عدد الـ Racks المخططة لكل فرع.")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            branch_1 = st.selectbox("الفرع الأول (Destination #1):", ["-- اختر الفرع --"] + all_branches)
-            if branch_1 != "-- اختر الفرع --":
-                racks_b1 = st.number_input(f"عدد الـ Racks لـ ({branch_1}):", min_value=0.0, value=0.0, step=0.5, key="b1")
-                branch_inputs[branch_1] = racks_b1
+    # Determine Truck Type from dataset
+    detected_truck_type = "Standard"
+    if not branch_skus.empty and 'Truck Type' in branch_skus.columns:
+        detected_truck_type = branch_skus['Truck Type'].iloc[0]
 
-        with col2:
-            # تصفية الفروع المقترحة للفرع الثاني بناءً على الإكسيل
-            possible_dest2 = []
-            if branch_1 != "-- اختر الفرع --":
-                mapped_rows = rack_df[rack_df['Destination#1'] == branch_1]
-                possible_dest2 = mapped_rows['Destination#2'].dropna().unique().tolist()
-            
-            selectable_b2 = possible_dest2 if possible_dest2 else all_branches
-            branch_2 = st.selectbox("الفرع الثاني (Destination #2 - اختياري):", ["-- لا يوجد فرع ثاني --"] + selectable_b2)
-            
-            if branch_2 != "-- لا يوجد فرع ثاني --":
-                racks_b2 = st.number_input(f"عدد الـ Racks لـ ({branch_2}):", min_value=0.0, value=0.0, step=0.5, key="b2")
-                branch_inputs[branch_2] = racks_b2
+    selected_truck_type = st.sidebar.selectbox(
+        "Truck Type", 
+        list(TRUCK_CAPACITIES.keys()), 
+        index=list(TRUCK_CAPACITIES.keys()).index(detected_truck_type) if detected_truck_type in TRUCK_CAPACITIES else 0
+    )
 
+    truck_max_capacity = TRUCK_CAPACITIES[selected_truck_type]
+
+    st.markdown(f"### 📍 Target Branch: **{selected_branch}**")
+
+    if branch_skus.empty:
+        st.warning(f"No mapped SKUs found for branch: {selected_branch}")
     else:
-        selected_branch = st.selectbox("اختر الفرع المستهدف:", all_branches)
-        racks_single = st.number_input(f"إجمالي عدد الـ Racks المطلوب إرسالها لـ ({selected_branch}):", min_value=0.0, value=0.0, step=0.5)
-        if racks_single > 0:
-            branch_inputs[selected_branch] = racks_single
+        st.markdown("#### 📦 Enter Demand Quantities per SKU")
+        
+        input_records = []
+        col1, col2 = st.columns(2)
 
-    # تحديد نوع الشاحنة المخصصة لهذه الفروع من شيت الإكسيل
-    truck_type = "Standard"
-    if branch_inputs:
-        first_branch = list(branch_inputs.keys())[0]
-        match_row = rack_df[(rack_df['Destination#1'] == first_branch) | (rack_df['Destination#2'] == first_branch)]
-        if not match_row.empty and 'Truck Type' in match_row.columns:
-            truck_type = match_row['Truck Type'].iloc[0]
-
-    # خيار تعديل نوع الشاحنة لو البلان غير نوع العربية
-    truck_type = st.sidebar.selectbox("نوع الشاحنة المستخدمة (Truck Type):", list(TRUCK_CAPACITIES.keys()), index=list(TRUCK_CAPACITIES.keys()).index(truck_type) if truck_type in TRUCK_CAPACITIES else 0)
-    
-    max_truck_cap = TRUCK_CAPACITIES[truck_type]
-
-    # --- الحسابات والنتائج ---
-    total_racks_demand = sum(branch_inputs.values())
-
-    if total_racks_demand > 0:
-        st.markdown("---")
-        st.markdown("## 📊 نتائج تحليل وسعة الشاحنة (Truck Capacity Analysis)")
-
-        trucks_needed = math.ceil(total_racks_demand / max_truck_cap)
-        overall_fill_pct = (total_racks_demand / (trucks_needed * max_truck_cap)) * 100
-
-        # الكروت الأساسية
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("إجمالي الـ Racks المطلوب", f"{total_racks_demand:.1f}")
-        m2.metric("نوع العربية والسعة", f"{truck_type} ({max_truck_cap} Rack)")
-        m3.metric("عدد الشاحنات المطلوبة", f"{trucks_needed} عربية")
-        m4.metric("نسبة تحميل الأسطول الإجمالية", f"{overall_fill_pct:.1f}%")
-
-        st.markdown("### 🚚 توزيع حمولة الشاحنة الواحدة والنسب لكل فرع:")
-
-        # تفاصيل الشاحنة الأولى
-        breakdown_data = []
-        for b_name, b_racks in branch_inputs.items():
-            b_pct_of_truck = (b_racks / max_truck_cap) * 100
-            b_pct_of_total_order = (b_racks / total_racks_demand) * 100
+        # Loop through SKUs mapped to this branch
+        for idx, row in branch_skus.reset_index(drop=True).iterrows():
+            sku_name = row.get('SKU', f"Item #{idx+1}")
+            category = row.get('Category', 'N/A')
+            units_per_container = row.get('Item per container', 1)
             
-            breakdown_data.append({
-                "اسم الفرع (Branch)": b_name,
-                "عدد الـ Racks": b_racks,
-                "نسبة إشغال العربية الأولى (Truck Fill %)": f"{b_pct_of_truck:.1f}%",
-                "نسبته من إجمالي الطلبية": f"{b_pct_of_total_order:.1f}%"
-            })
+            with col1 if idx % 2 == 0 else col2:
+                demand_qty = st.number_input(
+                    f"**{sku_name}** ({category}) - Units/Rack: {units_per_container}",
+                    min_value=0,
+                    value=0,
+                    step=10,
+                    key=f"sku_input_{idx}"
+                )
 
-        st.table(pd.DataFrame(breakdown_data))
+                if demand_qty > 0:
+                    racks_needed = demand_qty / units_per_container if units_per_container > 0 else 0
+                    input_records.append({
+                        "SKU": sku_name,
+                        "Category": category,
+                        "Demand (Units)": demand_qty,
+                        "Units/Rack": units_per_container,
+                        "Calculated Racks": racks_needed
+                    })
 
-        # تنبيهات ذكية بناءً على نسبة التعبئة
-        if overall_fill_pct > 100:
-            st.error(f"⚠️ **تنبيه:** الحجم الكلي ({total_racks_demand} Rack) أكبر من سعة شاحنة واحدة {truck_type} ({max_truck_cap} Rack)! ستحتاج إلى **{trucks_needed} شاحنات**.")
-        elif overall_fill_pct >= 85:
-            st.success(f"✅ **استغلال ممتاز للشاحنة!** العربية متقفلة بنسبة **{overall_fill_pct:.1f}%**.")
+        # Calculations & Analytics
+        if input_records:
+            summary_df = pd.DataFrame(input_records)
+            total_racks = summary_df['Calculated Racks'].sum()
+            
+            trucks_needed = math.ceil(total_racks / truck_max_capacity) if truck_max_capacity > 0 else 0
+            overall_fill_pct = (total_racks / (trucks_needed * truck_max_capacity) * 100) if trucks_needed > 0 else 0
+
+            # Calculate individual SKU contribution to truck capacity
+            summary_df['Truck Fill Contribution %'] = summary_df['Calculated Racks'].apply(
+                lambda r: f"{(r / truck_max_capacity * 100):.1f}%"
+            )
+
+            st.markdown("---")
+            st.markdown("### 🚛 Fleet Capacity Summary")
+
+            # Dashboard Metrics
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total Racks Demand", f"{total_racks:.2f}")
+            m2.metric("Truck Type & Capacity", f"{selected_truck_type} ({truck_max_capacity} Racks)")
+            m3.metric("Required Trucks", f"{trucks_needed}")
+            m4.metric("Fleet Fill %", f"{overall_fill_pct:.1f}%")
+
+            st.markdown("#### 📋 Order Breakdown by SKU")
+            st.dataframe(summary_df, use_container_width=True)
+
+            # Capacity Alerts
+            if overall_fill_pct >= 85 and overall_fill_pct <= 100:
+                st.success(f"✅ Optimal truck utilization! Fleet is filled at **{overall_fill_pct:.1f}%**.")
+            elif overall_fill_pct > 100:
+                st.error(f"⚠️ Demand exceeds single truck capacity! Need **{trucks_needed} trucks**.")
+            else:
+                st.warning(f"⚠️ Truck capacity is underutilized (**{overall_fill_pct:.1f}%** fill rate).")
         else:
-            st.warning(f"⚠️ **تحذير:** العربية طالعة مش مليانة قوي (نسبة التحميل **{overall_fill_pct:.1f}%** فقط). تفكر تزود طلبية أو تدمج فرع كمان؟")
-
+            st.info("Enter quantities for the SKUs above to calculate total racks and truck fill percentage.")
 else:
-    st.error("رجاء التأكد من وجود ملف 'Rack Capacity.xlsx' في المشروع.")
+    st.error("Please ensure 'Rack Capacity.xlsx' is uploaded in your GitHub repository.")
