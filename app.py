@@ -2,14 +2,18 @@ import streamlit as st
 import pandas as pd
 import math
 
+# --------------------------------------------------
 # Page Setup
+# --------------------------------------------------
 st.set_page_config(
     page_title="Breadfast Logistics Planner",
     page_icon="🚚",
     layout="wide"
 )
 
-# Custom Styling - Light theme, brand colors, no black text/background anywhere
+# --------------------------------------------------
+# Styling
+# --------------------------------------------------
 st.markdown("""
 <style>
     .stApp, [data-testid="stSidebar"] {
@@ -23,220 +27,274 @@ st.markdown("""
         text-align: center;
         margin-bottom: 20px;
     }
+
     .main-header h1 {
-        color: #FFFFFF;
+        color: white;
         margin: 0;
-        font-weight: 800;
     }
+
     .main-header p {
         color: #FFD966;
         margin-top: 5px;
-        font-weight: 600;
     }
 
     div[data-testid="stMetric"] {
-        background-color: #FFFFFF;
+        background-color: white;
         border-left: 5px solid #AA0082;
         padding: 12px;
         border-radius: 8px;
     }
-    div[data-testid="stMetric"] label {
-        color: #6B5B73 !important;
-        font-weight: bold !important;
-    }
-    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
-        color: #AA0082 !important;
-        font-weight: bold !important;
-    }
-
-    div[data-baseweb="input"], div[data-baseweb="select"] {
-        background-color: #FFFFFF;
-        border: 1px solid #AA0082;
-        border-radius: 6px;
-    }
-
-    .streamlit-expanderHeader {
-        background-color: #F3E9F1;
-        border-radius: 6px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
-# Header Section
 st.markdown("""
 <div class="main-header">
     <h1>🍞 Breadfast Logistics Planning</h1>
-    <p>Multi-Branch & Full Category Truck Capacity Allocator</p>
+    <p>All Teams - All Categories - All Branches</p>
 </div>
 """, unsafe_allow_html=True)
 
+# --------------------------------------------------
+# Config
+# --------------------------------------------------
 RACK_FILE = "Rack Capacity.xlsx"
 
-# Each team lives on its own sheet in the same workbook
 TEAM_SHEETS = {
     "Cheese Team": "Cheese Team",
     "Chilled Team": "Chilled Team"
 }
 
-# Truck capacities (in racks)
 TRUCK_CAPACITIES = {
     "Standard Chiller Truck": 70,
     "NKR Truck": 150,
     "Jumbo Chiller Truck": 300
 }
 
-
+# --------------------------------------------------
+# Load All Sheets
+# --------------------------------------------------
 @st.cache_data
-def load_rack_data(sheet_name):
-    try:
-        df = pd.read_excel(RACK_FILE, sheet_name=sheet_name)
-        df.columns = df.columns.str.strip()
+def load_all_data():
 
-        # Clean up extra whitespace in text columns so branch matching works correctly
-        for col in ['Destination#1', 'Destination#2', 'Category', 'SKU']:
-            if col in df.columns:
-                df[col] = df[col].apply(lambda x: x.strip() if isinstance(x, str) else x)
+    all_data = []
 
-        return df
-    except Exception as e:
-        st.error(f"Error loading sheet '{sheet_name}' from '{RACK_FILE}': {e}")
-        return None
+    for sheet in TEAM_SHEETS.values():
 
+        try:
 
-# ------------------- Sidebar: Trip Settings -------------------
+            df = pd.read_excel(
+                RACK_FILE,
+                sheet_name=sheet
+            )
+
+            df.columns = df.columns.str.strip()
+
+            for col in [
+                'Destination#1',
+                'Destination#2',
+                'Category',
+                'SKU'
+            ]:
+
+                if col in df.columns:
+                    df[col] = (
+                        df[col]
+                        .astype(str)
+                        .str.strip()
+                    )
+
+            df["Team"] = sheet
+
+            all_data.append(df)
+
+        except Exception as e:
+            st.error(f"Error loading {sheet}: {e}")
+
+    return pd.concat(
+        all_data,
+        ignore_index=True
+    )
+
+rack_df = load_all_data()
+
+# --------------------------------------------------
+# Sidebar
+# --------------------------------------------------
 st.sidebar.header("⚙️ Trip Settings")
 
-# 0) Team selection (which sheet to load)
-selected_team = st.sidebar.selectbox(
-    "Select Team:",
-    list(TEAM_SHEETS.keys()),
-    index=0
+dest1 = rack_df["Destination#1"].dropna().unique().tolist()
+dest2 = rack_df["Destination#2"].dropna().unique().tolist()
+
+all_branches = sorted(
+    list(
+        set(dest1 + dest2)
+    )
 )
 
-rack_df = load_rack_data(TEAM_SHEETS[selected_team])
+selected_branches = st.sidebar.multiselect(
+    "Select Branch(es)",
+    options=all_branches,
+    default=all_branches
+)
 
-if rack_df is not None:
-    # List of all branches across both destination columns
-    dest1 = rack_df['Destination#1'].dropna().unique().tolist() if 'Destination#1' in rack_df.columns else []
-    dest2 = rack_df['Destination#2'].dropna().unique().tolist() if 'Destination#2' in rack_df.columns else []
-    all_branches = sorted(list(set(dest1 + dest2)))
+selected_truck_type = st.sidebar.selectbox(
+    "Truck Type",
+    list(TRUCK_CAPACITIES.keys())
+)
 
-    # 1) Select one or two (or more) branches for this truck route
-    selected_branches = st.sidebar.multiselect(
-        "Select Branch(es) for this Truck Route:",
-        options=all_branches,
-        default=[]
+truck_capacity = TRUCK_CAPACITIES[selected_truck_type]
+
+st.sidebar.markdown(
+    f"### Capacity: {truck_capacity} Racks"
+)
+
+# --------------------------------------------------
+# Filter Branches
+# --------------------------------------------------
+condition = pd.Series(
+    False,
+    index=rack_df.index
+)
+
+condition |= rack_df["Destination#1"].isin(selected_branches)
+condition |= rack_df["Destination#2"].isin(selected_branches)
+
+filtered_df = rack_df[condition].copy()
+
+# --------------------------------------------------
+# Header
+# --------------------------------------------------
+st.markdown("## 🧑‍🤝‍🧑 All Teams")
+
+st.markdown(
+    f"### 📍 Selected Branches: {len(selected_branches)}"
+)
+
+input_records = []
+
+# --------------------------------------------------
+# Display Teams / Categories / Products
+# --------------------------------------------------
+teams = filtered_df["Team"].unique()
+
+for team in teams:
+
+    team_df = filtered_df[
+        filtered_df["Team"] == team
+    ]
+
+    st.markdown(f"## 🚚 {team}")
+
+    categories = (
+        team_df["Category"]
+        .dropna()
+        .unique()
     )
 
-    # 2) Truck type
-    selected_truck_type = st.sidebar.selectbox(
-        "Select Truck Type:",
-        list(TRUCK_CAPACITIES.keys()),
-        index=0
-    )
-    truck_max_capacity = TRUCK_CAPACITIES[selected_truck_type]
-
-    st.sidebar.markdown(f"**Selected Truck Capacity:** {truck_max_capacity} Racks")
-
-    # 3) Optional: filter products by the selected branch(es)
-    filter_by_branch = st.sidebar.checkbox(
-        "Filter products by selected branch(es) only",
-        value=False,
-        help="If off, all products from this team's sheet are always shown."
-    )
-
-    # ------------------- Determine which products to display -------------------
-    if filter_by_branch and selected_branches:
-        condition = pd.Series(False, index=rack_df.index)
-        if 'Destination#1' in rack_df.columns:
-            condition |= rack_df['Destination#1'].isin(selected_branches)
-        if 'Destination#2' in rack_df.columns:
-            condition |= rack_df['Destination#2'].isin(selected_branches)
-
-        filtered_df = rack_df[condition].copy()
-
-        if filtered_df.empty:
-            st.warning("No products matched the selected branch(es). Showing all products instead.")
-            filtered_df = rack_df.copy()
-    else:
-        # Default: always show all products for the selected team, no hidden filtering
-        filtered_df = rack_df.copy()
-
-    # Trip header
-    st.markdown(f"### 🧑‍🤝‍🧑 Team: **{selected_team}**")
-    if selected_branches:
-        st.markdown(f"### 📍 Route Branches: **{', '.join(selected_branches)}**")
-    else:
-        st.markdown("### 📍 No branches selected yet (choose from the sidebar)")
-
-    st.markdown(f"### 📦 Enter Demand Quantities ({len(filtered_df)} Products)")
-
-    # Group products by category
-    categories = filtered_df['Category'].dropna().unique() if 'Category' in filtered_df.columns else ['All Products']
-
-    input_records = []
-
-    # Display all products, grouped by category
     for cat in categories:
-        cat_skus = filtered_df[filtered_df['Category'] == cat] if 'Category' in filtered_df.columns else filtered_df
 
-        with st.expander(f"📂 Category: **{cat}** ({len(cat_skus)} Products)", expanded=True):
+        cat_df = team_df[
+            team_df["Category"] == cat
+        ]
+
+        with st.expander(
+            f"📂 {cat} ({len(cat_df)} Products)",
+            expanded=False
+        ):
+
             col1, col2 = st.columns(2)
 
-            for idx, row in cat_skus.reset_index(drop=True).iterrows():
-                sku_name = row.get('SKU', f"Item #{idx + 1}")
-                units_per_container = row.get('Item per container', 1)
+            for idx, row in cat_df.reset_index(drop=True).iterrows():
+
+                sku = row["SKU"]
+
+                units_per_rack = row.get(
+                    "Item per container",
+                    1
+                )
 
                 with col1 if idx % 2 == 0 else col2:
-                    demand_qty = st.number_input(
-                        f"**{sku_name}** (Units/Rack: {units_per_container})",
+
+                    qty = st.number_input(
+                        f"{sku} (Units/Rack: {units_per_rack})",
                         min_value=0,
                         value=0,
                         step=10,
-                        key=f"input_{selected_team}_{cat}_{idx}_{sku_name}"
+                        key=f"{team}_{cat}_{idx}"
                     )
 
-                    if demand_qty > 0:
-                        racks_needed = demand_qty / units_per_container if units_per_container > 0 else 0
+                    if qty > 0:
+
+                        racks = (
+                            qty / units_per_rack
+                            if units_per_rack > 0
+                            else 0
+                        )
+
                         input_records.append({
+                            "Team": team,
                             "Category": cat,
-                            "SKU": sku_name,
-                            "Demand (Units)": demand_qty,
-                            "Units/Rack": units_per_container,
-                            "Calculated Racks": racks_needed
+                            "SKU": sku,
+                            "Demand (Units)": qty,
+                            "Units/Rack": units_per_rack,
+                            "Calculated Racks": racks
                         })
 
-    # ------------------- Final calculation -------------------
-    if input_records:
-        summary_df = pd.DataFrame(input_records)
-        total_racks = summary_df['Calculated Racks'].sum()
+# --------------------------------------------------
+# Summary
+# --------------------------------------------------
+if input_records:
 
-        trucks_needed = math.ceil(total_racks / truck_max_capacity) if truck_max_capacity > 0 else 0
-        overall_fill_pct = (total_racks / (trucks_needed * truck_max_capacity) * 100) if trucks_needed > 0 else 0
+    summary_df = pd.DataFrame(
+        input_records
+    )
 
-        summary_df['Truck Capacity Share %'] = summary_df['Calculated Racks'].apply(
-            lambda r: f"{(r / truck_max_capacity * 100):.1f}%"
-        )
+    total_racks = summary_df[
+        "Calculated Racks"
+    ].sum()
 
-        st.markdown("---")
-        st.markdown("### 🚛 Fleet & Truck Fill Metrics")
+    trucks_needed = math.ceil(
+        total_racks / truck_capacity
+    )
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Racks Needed", f"{total_racks:.2f}")
-        m2.metric("Truck Type & Limit", f"{selected_truck_type} ({truck_max_capacity} Racks)")
-        m3.metric("Required Trucks", f"{trucks_needed}")
-        m4.metric("Truck Fill %", f"{overall_fill_pct:.1f}%")
+    fill_pct = (
+        total_racks /
+        (trucks_needed * truck_capacity)
+        * 100
+    )
 
-        st.markdown("#### 📋 Order & Truck Share Summary")
-        st.dataframe(summary_df, use_container_width=True)
+    st.markdown("---")
+    st.markdown("## 🚛 Fleet Summary")
 
-        if overall_fill_pct > 100:
-            st.error(f"⚠️ Demand exceeds a single truck's capacity! Need **{trucks_needed} trucks**.")
-        elif overall_fill_pct >= 85:
-            st.success(f"✅ Optimal truck usage! Filled at **{overall_fill_pct:.1f}%**.")
-        else:
-            st.warning(f"⚠️ Low capacity utilization (**{overall_fill_pct:.1f}%**). Consider adding more stock.")
-    else:
-        st.info("Enter quantities above to see the truck capacity calculation.")
+    c1, c2, c3, c4 = st.columns(4)
+
+    c1.metric(
+        "Total Racks",
+        f"{total_racks:.2f}"
+    )
+
+    c2.metric(
+        "Truck Capacity",
+        truck_capacity
+    )
+
+    c3.metric(
+        "Required Trucks",
+        trucks_needed
+    )
+
+    c4.metric(
+        "Fill %",
+        f"{fill_pct:.1f}%"
+    )
+
+    st.dataframe(
+        summary_df,
+        use_container_width=True
+    )
+
 else:
-    st.error(f"Could not load the '{selected_team}' sheet from '{RACK_FILE}'. Please check the file is uploaded to your repo and the sheet name matches.")
+
+    st.info(
+        "Enter quantities for products to calculate racks and trucks."
+    )
