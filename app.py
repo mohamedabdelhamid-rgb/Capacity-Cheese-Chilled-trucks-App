@@ -9,13 +9,14 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom Styling - Light theme, brand colors, no black text/background anywhere
+# Custom Styling - Fixed contrast for labels & header
 st.markdown("""
 <style>
     .stApp, [data-testid="stSidebar"] {
         background-color: #FAF7FB;
     }
 
+    /* Header styling */
     .main-header {
         background-color: #AA0082;
         padding: 20px;
@@ -24,16 +25,17 @@ st.markdown("""
         margin-bottom: 20px;
     }
     .main-header h1 {
-        color: #FFFFFF;
+        color: #FFFFFF !important;
         margin: 0;
         font-weight: 800;
     }
     .main-header p {
-        color: #FFD966;
+        color: #FFD966 !important;
         margin-top: 5px;
         font-weight: 600;
     }
 
+    /* Metric Cards */
     div[data-testid="stMetric"] {
         background-color: #FFFFFF;
         border-left: 5px solid #AA0082;
@@ -49,6 +51,7 @@ st.markdown("""
         font-weight: bold !important;
     }
 
+    /* Input Controls & Expanders */
     div[data-baseweb="input"], div[data-baseweb="select"] {
         background-color: #FFFFFF;
         border: 1px solid #AA0082;
@@ -58,6 +61,21 @@ st.markdown("""
     .streamlit-expanderHeader {
         background-color: #F3E9F1;
         border-radius: 6px;
+    }
+
+    /* Fix: targeted dark text for product names, inputs, and standard UI elements */
+    [data-testid="stNumberInput"] label,
+    [data-testid="stNumberInput"] label p,
+    [data-testid="stNumberInput"] label span,
+    [data-testid="stNumberInput"] label strong,
+    div[data-testid="stExpander"] summary span,
+    .stMarkdown p, .stMarkdown strong {
+        color: #2E2530 !important;
+    }
+
+    /* Input text color inside text fields */
+    input {
+        color: #2E2530 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -75,8 +93,7 @@ RACK_FILE = "Rack Capacity.xlsx"
 
 @st.cache_data
 def get_available_sheets(file_path):
-    """Read the actual sheet names from the workbook instead of hardcoding them,
-    so the app never breaks if a sheet name has a typo/extra space/different case."""
+    """Read the actual sheet names from the workbook instead of hardcoding them."""
     try:
         xls = pd.ExcelFile(file_path)
         return xls.sheet_names
@@ -94,9 +111,7 @@ TRUCK_CAPACITIES = {
 
 
 def find_column(keywords, columns):
-    """Find the first column whose name matches one of the keywords (case-insensitive,
-    substring match). Used to be resilient to slightly different column names
-    like 'SKU Name', 'Product Name', 'Item Name', etc."""
+    """Find the first column whose name matches one of the keywords."""
     for kw in keywords:
         for c in columns:
             if kw.lower() in c.lower():
@@ -110,7 +125,7 @@ def load_rack_data(sheet_name):
         df = pd.read_excel(RACK_FILE, sheet_name=sheet_name)
         df.columns = df.columns.str.strip()
 
-        # Clean up extra whitespace in text columns so branch matching works correctly
+        # Clean up extra whitespace in text columns
         for col in ['Destination#1', 'Destination#2', 'Category', 'SKU']:
             if col in df.columns:
                 df[col] = df[col].apply(lambda x: x.strip() if isinstance(x, str) else x)
@@ -124,9 +139,6 @@ def load_rack_data(sheet_name):
 # ------------------- Sidebar: Trip Settings -------------------
 st.sidebar.header("⚙️ Trip Settings")
 
-# 0) Team selection — only Cheese / Chilled, matched against the actual
-#    sheet names in the workbook (so small differences like extra spaces,
-#    "Team" suffix, or capitalization don't break it).
 available_sheets = get_available_sheets(RACK_FILE)
 
 if not available_sheets:
@@ -135,7 +147,7 @@ if not available_sheets:
 
 
 def find_sheet(keyword, sheets):
-    """Find the actual sheet name that contains the given keyword (case-insensitive)."""
+    """Find the actual sheet name that contains the given keyword."""
     for s in sheets:
         if keyword.lower() in s.lower():
             return s
@@ -167,8 +179,6 @@ selected_team = team_options[selected_team_label]
 rack_df = load_rack_data(selected_team)
 
 if rack_df is not None:
-    # Resolve the real column names for product name / units-per-rack,
-    # since they might not be exactly "SKU" / "Item per container".
     name_col = find_column(["sku name", "product name", "item name", "sku", "product", "item"], rack_df.columns)
     units_col = find_column(["item per container", "units per container", "unit per container",
                               "units/rack", "units per rack", "per container", "per rack"], rack_df.columns)
@@ -189,21 +199,16 @@ if rack_df is not None:
             st.write(f"Units-per-rack column used: **{units_col}**")
             st.write(f"All columns: {list(rack_df.columns)}")
 
-    # List of all branches across both destination columns
     dest1 = rack_df['Destination#1'].dropna().unique().tolist() if 'Destination#1' in rack_df.columns else []
     dest2 = rack_df['Destination#2'].dropna().unique().tolist() if 'Destination#2' in rack_df.columns else []
     all_branches = sorted(list(set(dest1 + dest2)))
 
-    # 1) Branch selection is informational only (for the route label / metrics).
-    #    It NEVER filters the product list — all products, all categories, and
-    #    all branches are always shown regardless of what's picked here.
     selected_branches = st.sidebar.multiselect(
         "Select Branch(es) for this Truck Route (optional, for labeling only):",
         options=all_branches,
         default=[]
     )
 
-    # 2) Truck type
     selected_truck_type = st.sidebar.selectbox(
         "Select Truck Type:",
         list(TRUCK_CAPACITIES.keys()),
@@ -212,10 +217,8 @@ if rack_df is not None:
     truck_max_capacity = TRUCK_CAPACITIES[selected_truck_type]
 
     st.sidebar.markdown(f"**Selected Truck Capacity:** {truck_max_capacity} Racks")
-
     st.sidebar.info("📦 All products, categories, and branches are always shown below — nothing is filtered out.")
 
-    # ------------------- Always show ALL products for the selected team -------------------
     filtered_df = rack_df.copy()
 
     # Trip header
@@ -227,12 +230,10 @@ if rack_df is not None:
 
     st.markdown(f"### 📦 Enter Demand Quantities ({len(filtered_df)} Products)")
 
-    # Group products by category — every category present in the sheet is shown
     categories = sorted(filtered_df['Category'].dropna().unique().tolist()) if 'Category' in filtered_df.columns else ['All Products']
 
     input_records = []
 
-    # Display all products, grouped by category
     for cat in categories:
         cat_skus = filtered_df[filtered_df['Category'] == cat] if 'Category' in filtered_df.columns else filtered_df
 
