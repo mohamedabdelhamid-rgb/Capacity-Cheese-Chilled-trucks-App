@@ -72,11 +72,18 @@ st.markdown("""
 
 RACK_FILE = "Rack Capacity.xlsx"
 
-# Each team lives on its own sheet in the same workbook
-TEAM_SHEETS = {
-    "Cheese Team": "Cheese Team",
-    "Chilled Team": "Chilled Team"
-}
+
+@st.cache_data
+def get_available_sheets(file_path):
+    """Read the actual sheet names from the workbook instead of hardcoding them,
+    so the app never breaks if a sheet name has a typo/extra space/different case."""
+    try:
+        xls = pd.ExcelFile(file_path)
+        return xls.sheet_names
+    except Exception as e:
+        st.error(f"Error opening '{file_path}': {e}")
+        return []
+
 
 # Truck capacities (in racks)
 TRUCK_CAPACITIES = {
@@ -106,14 +113,47 @@ def load_rack_data(sheet_name):
 # ------------------- Sidebar: Trip Settings -------------------
 st.sidebar.header("⚙️ Trip Settings")
 
-# 0) Team selection (which sheet to load)
-selected_team = st.sidebar.selectbox(
+# 0) Team selection — only Cheese / Chilled, matched against the actual
+#    sheet names in the workbook (so small differences like extra spaces,
+#    "Team" suffix, or capitalization don't break it).
+available_sheets = get_available_sheets(RACK_FILE)
+
+if not available_sheets:
+    st.error(f"Could not open '{RACK_FILE}'. Please make sure the file is uploaded to your repo/app folder.")
+    st.stop()
+
+
+def find_sheet(keyword, sheets):
+    """Find the actual sheet name that contains the given keyword (case-insensitive)."""
+    for s in sheets:
+        if keyword.lower() in s.lower():
+            return s
+    return None
+
+
+team_options = {}
+cheese_sheet = find_sheet("cheese", available_sheets)
+chilled_sheet = find_sheet("chill", available_sheets)
+if cheese_sheet:
+    team_options["Cheese"] = cheese_sheet
+if chilled_sheet:
+    team_options["Chilled"] = chilled_sheet
+
+if not team_options:
+    st.error(
+        f"Could not find a 'Cheese' or 'Chilled' sheet in '{RACK_FILE}'. "
+        f"Sheets found in the file: {', '.join(available_sheets)}"
+    )
+    st.stop()
+
+selected_team_label = st.sidebar.selectbox(
     "Select Team:",
-    list(TEAM_SHEETS.keys()),
+    list(team_options.keys()),
     index=0
 )
+selected_team = team_options[selected_team_label]
 
-rack_df = load_rack_data(TEAM_SHEETS[selected_team])
+rack_df = load_rack_data(selected_team)
 
 if rack_df is not None:
     # List of all branches across both destination columns
@@ -146,7 +186,7 @@ if rack_df is not None:
     filtered_df = rack_df.copy()
 
     # Trip header
-    st.markdown(f"### 🧑‍🤝‍🧑 Team: **{selected_team}**")
+    st.markdown(f"### 🧑‍🤝‍🧑 Team: **{selected_team_label}**")
     if selected_branches:
         st.markdown(f"### 📍 Route Branches: **{', '.join(selected_branches)}**")
     else:
@@ -176,7 +216,7 @@ if rack_df is not None:
                         min_value=0,
                         value=0,
                         step=10,
-                        key=f"input_{selected_team}_{cat}_{idx}_{sku_name}"
+                        key=f"input_{selected_team_label}_{cat}_{idx}_{sku_name}"
                     )
 
                     if demand_qty > 0:
@@ -222,4 +262,4 @@ if rack_df is not None:
     else:
         st.info("Enter quantities above to see the truck capacity calculation.")
 else:
-    st.error(f"Could not load the '{selected_team}' sheet from '{RACK_FILE}'. Please check the file is uploaded to your repo and the sheet name matches.")
+    st.error(f"Could not load the '{selected_team_label}' sheet ('{selected_team}') from '{RACK_FILE}'.")
