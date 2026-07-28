@@ -93,6 +93,17 @@ TRUCK_CAPACITIES = {
 }
 
 
+def find_column(keywords, columns):
+    """Find the first column whose name matches one of the keywords (case-insensitive,
+    substring match). Used to be resilient to slightly different column names
+    like 'SKU Name', 'Product Name', 'Item Name', etc."""
+    for kw in keywords:
+        for c in columns:
+            if kw.lower() in c.lower():
+                return c
+    return None
+
+
 @st.cache_data
 def load_rack_data(sheet_name):
     try:
@@ -156,6 +167,28 @@ selected_team = team_options[selected_team_label]
 rack_df = load_rack_data(selected_team)
 
 if rack_df is not None:
+    # Resolve the real column names for product name / units-per-rack,
+    # since they might not be exactly "SKU" / "Item per container".
+    name_col = find_column(["sku name", "product name", "item name", "sku", "product", "item"], rack_df.columns)
+    units_col = find_column(["item per container", "units per container", "unit per container",
+                              "units/rack", "units per rack", "per container", "per rack"], rack_df.columns)
+
+    if name_col and name_col != "SKU":
+        rack_df = rack_df.rename(columns={name_col: "SKU"})
+    if units_col and units_col != "Item per container":
+        rack_df = rack_df.rename(columns={units_col: "Item per container"})
+
+    if "SKU" not in rack_df.columns:
+        st.sidebar.error(
+            "⚠️ Couldn't find a product-name column automatically. "
+            f"Columns found in this sheet: {', '.join(rack_df.columns)}"
+        )
+    else:
+        with st.sidebar.expander("🔍 Detected columns (debug)"):
+            st.write(f"Product name column used: **{name_col}**")
+            st.write(f"Units-per-rack column used: **{units_col}**")
+            st.write(f"All columns: {list(rack_df.columns)}")
+
     # List of all branches across both destination columns
     dest1 = rack_df['Destination#1'].dropna().unique().tolist() if 'Destination#1' in rack_df.columns else []
     dest2 = rack_df['Destination#2'].dropna().unique().tolist() if 'Destination#2' in rack_df.columns else []
